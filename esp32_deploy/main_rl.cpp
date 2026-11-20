@@ -64,6 +64,16 @@ static const float TICKS_PER_REV     = ENCODER_BASE_PPR * ENCODER_QUAD_MULT * MO
 #define MOTOR_R_SIGN        1.0f
 #define PITCH_OFFSET_RAD    0.0f
 
+// Hieu chuan cam bien trong 5 giay dau tien khi bat nguon:
+//   - Trong 5s nay motor TAT hoan toan, LED tren ESP32 (GPIO 2) nhay nhanh bao hieu.
+//   - 1.5s dau cho ban dat xe dung yen tai diem can bang; 3.5s tiep theo lay trung binh.
+//   - AUTO_CALIB_PITCH_ZERO = 1: tu dong lay diem 0 can bang (neu giu xe trong +/-25 deg)
+//     giup bu sai lech trong tam / goc gan MPU6050 ma khong can cam USB go 'Z'.
+#define CALIB_DURATION_MS     5000UL
+#define CALIB_SETTLE_MS       1500UL
+#define AUTO_CALIB_PITCH_ZERO 1
+#define CALIB_LED_PIN         2
+
 // Che do hoat dong:
 //   0 = Chi tu can bang tai cho (mac dinh, tat W/S/A/D, giu cmdV=0 & cmdYaw=0)
 //   1 = Bat nhan lenh di chuyen qua Serial (W/S/A/D/X/+/-)
@@ -72,6 +82,14 @@ static const float TICKS_PER_REV     = ENCODER_BASE_PPR * ENCODER_QUAD_MULT * MO
 // Bu vung chet PWM cua L298N (~1.8-2V sut ap BJT) + hop so GA25-370 (0..35).
 // Tang len ~18..28 neu thay banh bi re ma khong nhich khi xe nghieng nhe.
 #define MOTOR_DEADZONE_PWM  0
+
+// Tu kiem tra dong co khi bat nguon (quay NGUOC -> dung -> quay XUOI -> tat roi moi calib 5s):
+//   - MOTOR_SELFTEST_ENABLE = 1: bat quay test 2 chieu luc khoi dong (dat 0 de bo qua)
+//   - MOTOR_SELFTEST_CMD    = 0.30f: muc PWM nhe (0.20..0.45) de banh quay test khong giat manh
+//   - MOTOR_SELFTEST_MS     = 350: thoi gian chay moi chieu (ms)
+#define MOTOR_SELFTEST_ENABLE 1
+#define MOTOR_SELFTEST_CMD    0.30f
+#define MOTOR_SELFTEST_MS     350
 
 // Thong so vat ly & dieu khien (khop 100% voi MuJoCo env)
 static const float WHEEL_RADIUS  = 0.0325f; // Banh 65mm -> R = 0.0325 m
@@ -120,8 +138,26 @@ void isrEncB() {
   portEXIT_CRITICAL_ISR(&encBMux);
 }
 
+static inline void readEncoders(long &encA, long &encB) {
+  portENTER_CRITICAL(&encAMux);
+  encA = encoderA_count;
+  portEXIT_CRITICAL(&encAMux);
+  portENTER_CRITICAL(&encBMux);
+  encB = encoderB_count;
+  portEXIT_CRITICAL(&encBMux);
+}
+
+static inline void resetEncoders() {
+  portENTER_CRITICAL(&encAMux);
+  encoderA_count = 0;
+  portEXIT_CRITICAL(&encAMux);
+  portENTER_CRITICAL(&encBMux);
+  encoderB_count = 0;
+  portEXIT_CRITICAL(&encBMux);
+}
+
 // ============================================================================
-// 4. DIEU KHIEN DONG CO L298N
+// 4. DIEU KHIEN DONG CO L298N & TU KIEM TRA LUC KHOI DONG
 // ============================================================================
 static void driveMotor(int pwmPin, int in1, int in2, float normCmd) {
   float mag = fabsf(normCmd);
@@ -144,6 +180,56 @@ static void driveMotor(int pwmPin, int in1, int in2, float normCmd) {
     digitalWrite(in2, HIGH);
   }
   analogWrite(pwmPin, pwm);
+}
+
+static inline void runStartupMotorSelfTest() {
+#if MOTOR_SELFTEST_ENABLE
+  Serial.println("Dang kiem tra dong co: quay NGUOC -> quay XUOI...");
+  long a0 = 0, b0 = 0, a1 = 0, b1 = 0;
+
+  // 1. Quay NGUOC
+  resetEncoders();
+  driveMotor(ENA, IN1, IN2, -MOTOR_L_SIGN * MOTOR_SELFTEST_CMD);
+  driveMotor(ENB, IN3, IN4, -MOTOR_R_SIGN * MOTOR_SELFTEST_CMD);
+  delay(MOTOR_SELFTEST_MS);
+  driveMotor(ENA, IN1, IN2, 0.0f);
+  driveMotor(ENB, IN3, IN4, 0.0f);
+  delay(150);
+  readEncoders(a0, b0);
+  long revL = (long)(ENC_L_SIGN * (float)a0);
+  long revR = (long)(ENC_R_SIGN * (float)b0);
+  Serial.print("  [TEST NGUOC] dEncL="); Serial.print(revL);
+  Serial.print(" | dEncR="); Serial.println(revR);
+
+  // Nghi ngan bao ve cau H L298N truoc khi dao chieu
+  delay(150);
+
+  // 2. Quay XUOI
+  resetEncoders();
+  driveMotor(ENA, IN1, IN2, MOTOR_L_SIGN * MOTOR_SELFTEST_CMD);
+  driveMotor(ENB, IN3, IN4, MOTOR_R_SIGN * MOTOR_SELFTEST_CMD);
+  delay(MOTOR_SELFTEST_MS);
+  driveMotor(ENA, IN1, IN2, 0.0f);
+  driveMotor(ENB, IN3, IN4, 0.0f);
+  delay(250); // Cho xe & banh dung han truoc khi calib MPU6050 5s
+  readEncoders(a1, b1);
+  long fwdL = (long)(ENC_L_SIGN * (float)a1);
+  long fwdR = (long)(ENC_R_SIGN * (float)b1);
+  Serial.print("  [TEST XUOI]  dEncL="); Serial.print(fwdL);
+  Serial.print(" | dEncR="); Serial.println(fwdR);
+
+  if (revL == 0 && fwdL == 0) {
+    Serial.println("  [CANH BAO] Khong thay xung encoder Trai (Kiem tra nguon 3.3V/chan 16-17 hoac day motor L)!");
+  } else if (fwdL < 0 && revL > 0) {
+    Serial.println("  [GOI Y] Encoder Trai nguoc chieu quay -> doi ENC_L_SIGN thanh -1.0f (hoac dao day motor A).");
+  }
+  if (revR == 0 && fwdR == 0) {
+    Serial.println("  [CANH BAO] Khong thay xung encoder Phai (Kiem tra nguon 3.3V/chan 18-19 hoac day motor R)!");
+  } else if (fwdR < 0 && revR > 0) {
+    Serial.println("  [GOI Y] Encoder Phai nguoc chieu quay -> doi ENC_R_SIGN thanh -1.0f (hoac dao day motor B).");
+  }
+  resetEncoders();
+#endif
 }
 
 // ============================================================================
@@ -231,27 +317,94 @@ static void initMpu6050() {
   writeMpuReg(0x1C, 0x00); // Accel +-2g
   delay(60);
 
-  // Hieu chuan offset gyro (giu xe dung yen luc bat nguon)
-  long sumGp = 0, sumGz = 0;
+  // Hieu chuan MPU6050 trong 5 giay dau tien (tat motor, giu xe dung yen tai diem can bang)
+#if CALIB_LED_PIN >= 0
+  pinMode(CALIB_LED_PIN, OUTPUT);
+  digitalWrite(CALIB_LED_PIN, LOW);
+#endif
+  Serial.println("Dang calib MPU6050 trong 5 giay... Hay giu xe DUNG YEN tai diem can bang!");
+
+  unsigned long startMs = millis();
+  unsigned long lastCountdownMs = 0UL;
+  unsigned long lastBlinkMs = 0UL;
+  int secLeft = (int)((CALIB_DURATION_MS + 999UL) / 1000UL);
+  bool ledState = false;
+
+  double sumGp = 0.0;
+  double sumGz = 0.0;
   int valid = 0;
-  for (int i = 0; i < 200; ++i) {
-    int16_t ax, ay, az, gx, gy, gz;
-    if (readMpuRaw(ax, ay, az, gx, gy, gz)) {
-      sumGp += selectPitchGyroRaw(gx, gy);
-      sumGz += gz;
-      valid++;
+#if AUTO_CALIB_PITCH_ZERO
+  double sumPitch = 0.0;
+  int validPitch = 0;
+#endif
+
+  Serial.print("  Calib con "); Serial.print(secLeft); Serial.println("s...");
+  while (millis() - startMs < CALIB_DURATION_MS) {
+    unsigned long elapsed = millis() - startMs;
+
+    if (elapsed - lastBlinkMs >= 125UL) {
+      lastBlinkMs = elapsed;
+      ledState = !ledState;
+#if CALIB_LED_PIN >= 0
+      digitalWrite(CALIB_LED_PIN, ledState ? HIGH : LOW);
+#endif
     }
-    delay(3);
-  }
-  if (valid > 0) {
-    gyroPitchOffset = (float)sumGp / (float)valid;
-    gyroZOffset = (float)sumGz / (float)valid;
-  } else {
-    Serial.println("[CANH BAO] Khong doc duoc MPU6050! Kiem tra day SDA(21)/SCL(22)/VCC(3.3V).");
+
+    if (elapsed - lastCountdownMs >= 1000UL) {
+      lastCountdownMs += 1000UL;
+      secLeft--;
+      if (secLeft > 0) {
+        Serial.print("  Calib con "); Serial.print(secLeft); Serial.println("s...");
+      }
+    }
+
+    // Bo qua CALIB_SETTLE_MS (1.5s) dau de tay on dinh xe, lay mau trong 3.5s con lai
+    if (elapsed >= CALIB_SETTLE_MS) {
+      int16_t ax, ay, az, gx, gy, gz;
+      if (readMpuRaw(ax, ay, az, gx, gy, gz)) {
+        sumGp += (double)selectPitchGyroRaw(gx, gy);
+        sumGz += (double)gz;
+        valid++;
+#if AUTO_CALIB_PITCH_ZERO
+        if (ax != 0 || ay != 0 || az != 0) {
+          sumPitch += (double)computeRawAccelPitch(ax, ay, az);
+          validPitch++;
+        }
+#endif
+      }
+    }
+    delay(5);
   }
 
+  if (valid > 0) {
+    gyroPitchOffset = (float)(sumGp / (double)valid);
+    gyroZOffset = (float)(sumGz / (double)valid);
+    Serial.print("Calib gyro xong ("); Serial.print(valid);
+    Serial.print(" mau) | gpOff="); Serial.print(gyroPitchOffset, 1);
+    Serial.print(", gzOff="); Serial.println(gyroZOffset, 1);
+  } else {
+    Serial.println("[CANH BAO] Khong doc duoc MPU6050 trong 5s calib! Kiem tra SDA(21)/SCL(22)/VCC(3.3V).");
+  }
+
+#if AUTO_CALIB_PITCH_ZERO
+  if (validPitch > 0) {
+    float avgRawPitch = (float)(sumPitch / (double)validPitch);
+    // Chi tu dong zero neu xe giu gan thang dung (<= 25 deg), tranh zero nham khi xe nam ngang
+    if (fabsf(avgRawPitch) <= 0.436f) {
+      pitchZeroOffset = avgRawPitch + PITCH_OFFSET_RAD;
+      Serial.print("-> Tu dong Zero trong tam/goc can bang! pitchZeroOffset(deg)=");
+      Serial.println(pitchZeroOffset * 57.29578f, 2);
+    } else {
+      pitchZeroOffset = PITCH_OFFSET_RAD;
+      Serial.print("[CANH BAO] Xe nghieng > 25 deg luc calib (");
+      Serial.print(avgRawPitch * 57.29578f, 1);
+      Serial.println(" deg) -> Giu nguyen PITCH_OFFSET_RAD mac dinh.");
+    }
+  }
+#endif
+
   int16_t ax, ay, az, gx, gy, gz;
-  if (readMpuRaw(ax, ay, az, gx, gy, gz)) {
+  if (readMpuRaw(ax, ay, az, gx, gy, gz) && (ax != 0 || ay != 0 || az != 0)) {
     lastPitchAccel = computeRawAccelPitch(ax, ay, az) - pitchZeroOffset;
     pitchEst = lastPitchAccel;
   }
@@ -383,11 +536,22 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(ENCB_A), isrEncB, CHANGE);
   attachInterrupt(digitalPinToInterrupt(ENCB_B), isrEncB, CHANGE);
 
-  // 3. Khoi tao MPU6050
+  // 3. Test dong co quay nguoc & quay xuoi truoc, sau do tat dong co de calib 5s
+  runStartupMotorSelfTest();
+
+  // 4. Khoi tao & calib MPU6050 trong 5 giay (luc nay dong co da tat hoan toan)
   initMpu6050();
+
+  // Xoa xung encoder phat sinh trong luc test / cam giu xe calib 5s
+  resetEncoders();
+  resetControllerState(0, 0);
+
   if (fabsf(pitchEst) > 0.785f) {
     safetyTripped = true;
   }
+#if CALIB_LED_PIN >= 0
+  digitalWrite(CALIB_LED_PIN, safetyTripped ? LOW : HIGH);
+#endif
 
   lastStepUs = micros();
   Serial.println("--- HE THONG RL GA25-370 SAN SANG ---");
@@ -402,12 +566,7 @@ void setup() {
 void loop() {
   // Doc snapshot encoder an toan
   long encA, encB;
-  portENTER_CRITICAL(&encAMux);
-  encA = encoderA_count;
-  portEXIT_CRITICAL(&encAMux);
-  portENTER_CRITICAL(&encBMux);
-  encB = encoderB_count;
-  portEXIT_CRITICAL(&encBMux);
+  readEncoders(encA, encB);
 
   processSerialCommands(encA, encB);
 
@@ -465,6 +624,10 @@ void loop() {
       uprightStableCount = 0;
     }
   }
+
+#if CALIB_LED_PIN >= 0
+  digitalWrite(CALIB_LED_PIN, safetyTripped ? LOW : HIGH);
+#endif
 
   if (safetyTripped) {
     driveMotor(ENA, IN1, IN2, 0.0f);
