@@ -1,0 +1,116 @@
+<mujoco model="xe_can_bang">
+  <compiler angle="radian" inertiafromgeom="true" />
+  <option timestep="0.002" gravity="0 0 -9.81" integrator="RK4" />
+
+  <visual>
+    <headlight diffuse="0.7 0.7 0.7" ambient="0.35 0.35 0.35" specular="0.2 0.2 0.2" />
+    <rgba haze="0.15 0.25 0.35 1" />
+    <global azimuth="135" elevation="-20" />
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.25 0.40 0.58" rgb2="0.05 0.08 0.12" width="512" height="512" />
+    <texture name="grid" type="2d" builtin="checker" rgb1="0.22 0.25 0.28" rgb2="0.30 0.34 0.38" width="512" height="512" mark="edge" markrgb="0.5 0.6 0.7" />
+    <material name="grid_mat" texture="grid" texrepeat="32 32" texuniform="true" reflectance="0.15" />
+
+    <!-- Component materials matching real hardware -->
+    <material name="acrylic_dark" rgba="0.12 0.14 0.16 1" specular="0.4" shininess="0.6" />
+    <material name="acrylic_clear" rgba="0.75 0.85 0.92 0.85" specular="0.6" shininess="0.8" />
+    <material name="rubber_tire" rgba="0.10 0.10 0.11 1" roughness="0.9" />
+    <material name="wheel_rim" rgba="0.95 0.75 0.10 1" specular="0.3" />
+    <material name="motor_metal" rgba="0.68 0.70 0.74 1" specular="0.7" shininess="0.8" />
+    <material name="motor_cap" rgba="0.18 0.18 0.20 1" />
+    <material name="pcb_red" rgba="0.75 0.12 0.12 1" specular="0.3" />
+    <material name="pcb_blue" rgba="0.10 0.32 0.72 1" specular="0.3" />
+    <material name="pcb_black" rgba="0.14 0.15 0.18 1" specular="0.3" />
+    <material name="battery_wrap" rgba="0.12 0.45 0.75 1" specular="0.2" />
+    <material name="brass" rgba="0.80 0.65 0.25 1" specular="0.8" />
+  </asset>
+
+  <default>
+    <geom condim="3" friction="1.0 0.005 0.0001" />
+    <joint damping="0.0005" armature="0.0002" />
+  </default>
+
+  <worldbody>
+    <light pos="0.5 -0.8 1.8" dir="-0.2 0.3 -1" directional="true" castshadow="true" />
+    <geom name="floor" type="plane" size="40 40 0.1" material="grid_mat" condim="3" friction="1.0 0.005 0.0001" />
+
+    <!-- Origin marker -->
+    <geom name="origin_marker" type="cylinder" size="0.04 0.0005" pos="0 0 0.0005" rgba="0.2 0.8 0.4 0.5" contype="0" conaffinity="0" />
+
+    <!-- Robot root placed at wheel axle height (r_wheel = 0.0325 m) -->
+    <body name="chassis" pos="0 0 0.0325">
+      <freejoint name="root_free" />
+
+      <!-- Lower base plate (đế.SLDPRT) -->
+      <geom name="base_plate" type="box" size="0.045 0.062 0.002" pos="0 0 0.018" mass="0.065" material="acrylic_dark" />
+
+      <!-- Motor brackets (gá môt.SLDPRT: 30x20x15 mm) -->
+      <geom name="bracket_left" type="box" size="0.015 0.010 0.0075" pos="0 0.050 0.009" mass="0.018" material="motor_metal" contype="0" conaffinity="0" />
+      <geom name="bracket_right" type="box" size="0.015 0.010 0.0075" pos="0 -0.050 0.009" mass="0.018" material="motor_metal" contype="0" conaffinity="0" />
+
+      <!-- DC Geared Motors + Encoders (môt.SLDPRT: R=12mm, L=68mm) -->
+      <geom name="motor_left" type="cylinder" size="0.012 0.032" pos="0 0.036 0" euler="1.5707963 0 0" mass="0.095" material="motor_metal" />
+      <geom name="encoder_left" type="cylinder" size="0.011 0.005" pos="0 0.003 0" euler="1.5707963 0 0" mass="0.010" material="motor_cap" contype="0" conaffinity="0" />
+
+      <geom name="motor_right" type="cylinder" size="0.012 0.032" pos="0 -0.036 0" euler="1.5707963 0 0" mass="0.095" material="motor_metal" />
+      <geom name="encoder_right" type="cylinder" size="0.011 0.005" pos="0 -0.003 0" euler="1.5707963 0 0" mass="0.010" material="motor_cap" contype="0" conaffinity="0" />
+
+      <!-- L298N Driver (l298n.SLDPRT: 43x43x28 mm) -->
+      <geom name="l298n_pcb" type="box" size="0.0215 0.0215 0.002" pos="0.014 0 0.022" mass="0.015" material="pcb_red" contype="0" conaffinity="0" />
+      <geom name="l298n_heatsink" type="box" size="0.011 0.013 0.012" pos="0.018 0 0.036" mass="0.025" material="motor_metal" contype="0" conaffinity="0" />
+
+      <!-- LM2596 Buck Converter (mạch hạ ap.SLDPRT: 44x22x14 mm) -->
+      <geom name="lm2596" type="box" size="0.011 0.022 0.007" pos="-0.022 0.024 0.027" mass="0.018" material="pcb_blue" contype="0" conaffinity="0" />
+
+      <!-- MPU6050 IMU (mpu.SLDPRT: 21x16x5 mm) -->
+      <geom name="mpu6050" type="box" size="0.008 0.0105 0.0025" pos="-0.022 -0.024 0.0225" mass="0.005" material="pcb_blue" contype="0" conaffinity="0" />
+      <site name="imu_site" pos="-0.022 -0.024 0.024" size="0.004" rgba="0 1 0 1" />
+
+      <!-- 4 Standoffs connecting lower deck to upper deck -->
+      <geom name="standoff_fl" type="cylinder" size="0.003 0.026" pos="0.030 0.032 0.046" mass="0.006" material="brass" contype="0" conaffinity="0" />
+      <geom name="standoff_fr" type="cylinder" size="0.003 0.026" pos="0.030 -0.032 0.046" mass="0.006" material="brass" contype="0" conaffinity="0" />
+      <geom name="standoff_rl" type="cylinder" size="0.003 0.026" pos="-0.030 0.032 0.046" mass="0.006" material="brass" contype="0" conaffinity="0" />
+      <geom name="standoff_rr" type="cylinder" size="0.003 0.026" pos="-0.030 -0.032 0.046" mass="0.006" material="brass" contype="0" conaffinity="0" />
+
+      <!-- Upper Battery Deck (đế pinccc.SLDPRT: 70x80x3 mm) -->
+      <geom name="upper_plate" type="box" size="0.035 0.040 0.0015" pos="0 0 0.0735" mass="0.035" material="acrylic_clear" />
+
+      <!-- Battery Pack (pin.SLDPRT: 60x78x21 mm) -->
+      <geom name="battery_pack" type="box" size="0.030 0.039 0.0105" pos="-0.004 0 0.0855" mass="0.210" material="battery_wrap" />
+
+      <!-- ESP32 Controller (esp32.SLDPRT: 29x53x15 mm) mounted at front/top -->
+      <geom name="esp32" type="box" size="0.0145 0.0265 0.004" pos="0.028 0 0.065" euler="0 0.35 0" mass="0.015" material="pcb_black" contype="0" conaffinity="0" />
+
+      <!-- Left Wheel (bánh 65.SLDPRT: R=32.5mm) -->
+      <body name="left_wheel" pos="0 0.078 0">
+        <joint name="left_wheel_joint" type="hinge" axis="0 1 0" damping="0.001" armature="0.0005" />
+        <geom name="left_tire" type="cylinder" size="0.0325 0.010" euler="1.5707963 0 0" mass="0.035" material="rubber_tire" condim="3" friction="1.2 0.005 0.0001" />
+        <geom name="left_rim" type="cylinder" size="0.024 0.0105" euler="1.5707963 0 0" mass="0.005" material="wheel_rim" contype="0" conaffinity="0" />
+        <!-- Visual spoke indicator so wheel rotation is clearly visible -->
+        <geom name="left_spoke" type="box" size="0.020 0.011 0.0025" euler="0 0 0" mass="0.001" material="acrylic_dark" contype="0" conaffinity="0" />
+      </body>
+
+      <!-- Right Wheel (bánh 65.SLDPRT: R=32.5mm) -->
+      <body name="right_wheel" pos="0 -0.078 0">
+        <joint name="right_wheel_joint" type="hinge" axis="0 1 0" damping="0.001" armature="0.0005" />
+        <geom name="right_tire" type="cylinder" size="0.0325 0.010" euler="1.5707963 0 0" mass="0.035" material="rubber_tire" condim="3" friction="1.2 0.005 0.0001" />
+        <geom name="right_rim" type="cylinder" size="0.024 0.0105" euler="1.5707963 0 0" mass="0.005" material="wheel_rim" contype="0" conaffinity="0" />
+        <geom name="right_spoke" type="box" size="0.020 0.011 0.0025" euler="0 0 0" mass="0.001" material="acrylic_dark" contype="0" conaffinity="0" />
+      </body>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <motor name="left_motor" joint="left_wheel_joint" gear="1" ctrllimited="true" ctrlrange="-0.30 0.30" />
+    <motor name="right_motor" joint="right_wheel_joint" gear="1" ctrllimited="true" ctrlrange="-0.30 0.30" />
+  </actuator>
+
+  <sensor>
+    <gyro name="imu_gyro" site="imu_site" />
+    <accelerometer name="imu_accel" site="imu_site" />
+    <jointvel name="left_wheel_vel" joint="left_wheel_joint" />
+    <jointvel name="right_wheel_vel" joint="right_wheel_joint" />
+  </sensor>
+</mujoco>
