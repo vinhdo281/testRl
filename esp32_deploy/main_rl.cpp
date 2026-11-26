@@ -1,8 +1,13 @@
+
+
+
 #include <Arduino.h>
 #include <Wire.h>
 #include <ctype.h>
 #include <math.h>
 #include "rl_policy.h"
+#include <Preferences.h>
+#include "web_telemetry.h"
 // ============================================================================
 // 1. CAU HINH CHAN ESP32 (tham khao dung config chan trong main.cpp cu)
 // ============================================================================
@@ -15,8 +20,8 @@
 
 // Dong co B (Phai) - L298N + GA25-370 Encoder pha A/B
 #define ENB     25
-#define IN3     33
-#define IN4     32
+#define IN3     32
+#define IN4     33
 #define ENCB_A  18  // Day Vang  (Phase A)
 #define ENCB_B  19  // Day Xanh la (Phase B)
 // Luu y dau day GA25-370 (6 day):
@@ -50,18 +55,24 @@ static const float MOTOR_GEAR_RATIO  = 46.8f;
 static const float TICKS_PER_REV     = ENCODER_BASE_PPR * ENCODER_QUAD_MULT * MOTOR_GEAR_RATIO;
 
 // Chinh truc & dau (+/-1.0f) sao cho khop chieu gan MPU6050 & L298N tren xe:
-//   - IMU_PITCH_IS_X_AXIS = 0: truc quay cua xe trung truc Y tren board MPU6050 (gy, ax)
-//   - IMU_PITCH_IS_X_AXIS = 1: neu ban gan board MPU6050 xoay 90 do (gx, ay)
+//   - cfgPitchIsX = false: truc quay cua xe trung truc Y tren board MPU6050 (gy, ax)
+//   - cfgPitchIsX = true : neu ban gan board MPU6050 xoay 90 do (gx, ay)
 //   - +pitch    = xe nghieng ve phia truoc
 //   - +motor    = banh quay theo chieu tien
 //   - +encoder  = enc tang khi banh lan tien
-#define IMU_PITCH_IS_X_AXIS 0
-#define IMU_PITCH_SIGN      1.0f
-#define IMU_YAW_SIGN        1.0f
-#define ENC_L_SIGN          1.0f
-#define ENC_R_SIGN          1.0f
-#define MOTOR_L_SIGN        1.0f
-#define MOTOR_R_SIGN        1.0f
+// Cac gia tri duoi day la MAC DINH; co the doi truc tiep tren web (muc "Cau hinh chieu")
+// va duoc luu vao NVS (giu sau khi khoi dong lai).
+//   cfgPitchIsX = true : pitch quay quanh truc X cua MPU6050 (dung gx, ay)  <- mac dinh moi
+//   cfgPitchIsX = false: pitch quay quanh truc Y (dung gy, ax)
+static bool  cfgPitchIsX = true;
+static float cfgPitchSign  = 1.0f;
+static float cfgYawSign    = 1.0f;
+static float cfgEncLSign   = 1.0f;
+static float cfgEncRSign   = 1.0f;
+static float cfgMotorLSign = 1.0f;
+static float cfgMotorRSign = 1.0f;
+// Che do tam khi encoder PHAI hong: dung wR = wL (mat thong tin quay/yaw -> can bang kem hon)
+static bool  cfgMirrorEnc  = false;
 #define PITCH_OFFSET_RAD    0.0f
 
 // Hieu chuan cam bien trong 5 giay dau tien khi bat nguon:
@@ -189,15 +200,15 @@ static inline void runStartupMotorSelfTest() {
 
   // 1. Quay NGUOC
   resetEncoders();
-  driveMotor(ENA, IN1, IN2, -MOTOR_L_SIGN * MOTOR_SELFTEST_CMD);
-  driveMotor(ENB, IN3, IN4, -MOTOR_R_SIGN * MOTOR_SELFTEST_CMD);
+  driveMotor(ENA, IN1, IN2, -cfgMotorLSign * MOTOR_SELFTEST_CMD);
+  driveMotor(ENB, IN3, IN4, -cfgMotorRSign * MOTOR_SELFTEST_CMD);
   delay(MOTOR_SELFTEST_MS);
   driveMotor(ENA, IN1, IN2, 0.0f);
   driveMotor(ENB, IN3, IN4, 0.0f);
   delay(150);
   readEncoders(a0, b0);
-  long revL = (long)(ENC_L_SIGN * (float)a0);
-  long revR = (long)(ENC_R_SIGN * (float)b0);
+  long revL = (long)(cfgEncLSign * (float)a0);
+  long revR = (long)(cfgEncRSign * (float)b0);
   Serial.print("  [TEST NGUOC] dEncL="); Serial.print(revL);
   Serial.print(" | dEncR="); Serial.println(revR);
 
@@ -206,27 +217,27 @@ static inline void runStartupMotorSelfTest() {
 
   // 2. Quay XUOI
   resetEncoders();
-  driveMotor(ENA, IN1, IN2, MOTOR_L_SIGN * MOTOR_SELFTEST_CMD);
-  driveMotor(ENB, IN3, IN4, MOTOR_R_SIGN * MOTOR_SELFTEST_CMD);
+  driveMotor(ENA, IN1, IN2, cfgMotorLSign * MOTOR_SELFTEST_CMD);
+  driveMotor(ENB, IN3, IN4, cfgMotorRSign * MOTOR_SELFTEST_CMD);
   delay(MOTOR_SELFTEST_MS);
   driveMotor(ENA, IN1, IN2, 0.0f);
   driveMotor(ENB, IN3, IN4, 0.0f);
   delay(250); // Cho xe & banh dung han truoc khi calib MPU6050 5s
   readEncoders(a1, b1);
-  long fwdL = (long)(ENC_L_SIGN * (float)a1);
-  long fwdR = (long)(ENC_R_SIGN * (float)b1);
+  long fwdL = (long)(cfgEncLSign * (float)a1);
+  long fwdR = (long)(cfgEncRSign * (float)b1);
   Serial.print("  [TEST XUOI]  dEncL="); Serial.print(fwdL);
   Serial.print(" | dEncR="); Serial.println(fwdR);
 
-  if (revL == 0 && fwdL == 0) {
+  if (labs(revL) <= 2 && labs(fwdL) <= 2) {
     Serial.println("  [CANH BAO] Khong thay xung encoder Trai (Kiem tra nguon 3.3V/chan 16-17 hoac day motor L)!");
   } else if (fwdL < 0 && revL > 0) {
-    Serial.println("  [GOI Y] Encoder Trai nguoc chieu quay -> doi ENC_L_SIGN thanh -1.0f (hoac dao day motor A).");
+    Serial.println("  [GOI Y] Encoder Trai nguoc chieu quay -> bam 'Encoder trai' tren web de dao dau (hoac dao day motor A).");
   }
-  if (revR == 0 && fwdR == 0) {
-    Serial.println("  [CANH BAO] Khong thay xung encoder Phai (Kiem tra nguon 3.3V/chan 18-19 hoac day motor R)!");
+  if (labs(revR) <= 2 && labs(fwdR) <= 2) {
+    Serial.println("  [CANH BAO] Khong thay xung encoder Phai (Kiem tra nguon 3.3V/chan 18-19 hoac day motor R)! Tam thoi bat 'Mirror wR=wL' tren web.");
   } else if (fwdR < 0 && revR > 0) {
-    Serial.println("  [GOI Y] Encoder Phai nguoc chieu quay -> doi ENC_R_SIGN thanh -1.0f (hoac dao day motor B).");
+    Serial.println("  [GOI Y] Encoder Phai nguoc chieu quay -> bam 'Encoder phai' tren web de dao dau (hoac dao day motor B).");
   }
   resetEncoders();
 #endif
@@ -239,6 +250,9 @@ static uint8_t mpuAddr = MPU6050_ADDR;
 static float gyroPitchOffset = 0.0f;
 static float gyroZOffset = 0.0f;
 static float pitchZeroOffset = PITCH_OFFSET_RAD;
+static float pitchTrim = 0.0f;   // rad, chinh tay tren web, luu NVS, cong them vao zero
+static inline float zeroTotal() { return pitchZeroOffset + pitchTrim; }
+static void calibrateMpu();
 static float pitchEst = 0.0f;
 static float lastPitchAccel = 0.0f;
 static float lastPitchRate = 0.0f;
@@ -283,19 +297,12 @@ static float computeRawAccelPitch(int16_t ax, int16_t ay, int16_t az) {
   // Quy tac ban tay phai MPU6050:
   //   Quanh +Y: +gy khop voi atan2(-ax, az)
   //   Quanh +X: +gx khop voi atan2(+ay, az)
-#if IMU_PITCH_IS_X_AXIS
-  return IMU_PITCH_SIGN * atan2f((float)ay, (float)az);
-#else
-  return IMU_PITCH_SIGN * atan2f(-(float)ax, (float)az);
-#endif
+  if (cfgPitchIsX) return cfgPitchSign * atan2f((float)ay, (float)az);
+  return cfgPitchSign * atan2f(-(float)ax, (float)az);
 }
 
 static int16_t selectPitchGyroRaw(int16_t gx, int16_t gy) {
-#if IMU_PITCH_IS_X_AXIS
-  return gx;
-#else
-  return gy;
-#endif
+  return cfgPitchIsX ? gx : gy;
 }
 
 static void initMpu6050() {
@@ -316,8 +323,11 @@ static void initMpu6050() {
   writeMpuReg(0x1B, 0x08); // Gyro +-500 deg/s (65.5 LSB/(deg/s))
   writeMpuReg(0x1C, 0x00); // Accel +-2g
   delay(60);
+  calibrateMpu();
+}
 
-  // Hieu chuan MPU6050 trong 5 giay dau tien (tat motor, giu xe dung yen tai diem can bang)
+// Hieu chuan MPU6050 5 giay (goi luc khoi dong & khi bam 'Calib' tren web; motor phai dang tat)
+static void calibrateMpu() {
 #if CALIB_LED_PIN >= 0
   pinMode(CALIB_LED_PIN, OUTPUT);
   digitalWrite(CALIB_LED_PIN, LOW);
@@ -405,7 +415,7 @@ static void initMpu6050() {
 
   int16_t ax, ay, az, gx, gy, gz;
   if (readMpuRaw(ax, ay, az, gx, gy, gz) && (ax != 0 || ay != 0 || az != 0)) {
-    lastPitchAccel = computeRawAccelPitch(ax, ay, az) - pitchZeroOffset;
+    lastPitchAccel = computeRawAccelPitch(ax, ay, az) - zeroTotal();
     pitchEst = lastPitchAccel;
   }
 }
@@ -429,6 +439,7 @@ static float prevActL = 0.0f, prevActR = 0.0f;
 static unsigned long lastStepUs = 0;
 static bool telemetryEnabled = false;
 static bool safetyTripped = false;
+static bool paused = false;   // Pause tu web/Serial: tat motor, giu telemetry, 'Tiep tuc' de chay lai RL
 static int uprightStableCount = 0;
 
 static float clampf(float v, float lo, float hi) {
@@ -477,6 +488,11 @@ static void processSerialCommands(long encA, long encB) {
     if (command == 'T') {
       telemetryEnabled = !telemetryEnabled;
       Serial.println(telemetryEnabled ? "-> BAT Telemetry (200ms)" : "-> TAT Telemetry");
+    } else if (command == 'P') {
+      paused = !paused;
+      resetControllerState(encA, encB);
+      uprightStableCount = 0;
+      Serial.println(paused ? "-> PAUSE (tat motor)" : "-> TIEP TUC");
     } else if (command == 'Z') {
       pitchZeroOffset += pitchEst;
       pitchEst = 0.0f;
@@ -517,8 +533,171 @@ static void processSerialCommands(long encA, long encB) {
   }
 }
 
+// ---- Lenh tu giao dien web: trim / offset / zero / calib ----
+static Preferences prefs;
+
+static void saveTrim() {
+  prefs.begin("balance", false);
+  prefs.putFloat("trim", pitchTrim);
+  prefs.end();
+}
+
+static void saveConfig() {
+  prefs.begin("balance", false);
+  prefs.putBool("axisX", cfgPitchIsX);
+  prefs.putChar("ps", cfgPitchSign > 0 ? 1 : -1);
+  prefs.putChar("ys", cfgYawSign > 0 ? 1 : -1);
+  prefs.putChar("el", cfgEncLSign > 0 ? 1 : -1);
+  prefs.putChar("er", cfgEncRSign > 0 ? 1 : -1);
+  prefs.putChar("ml", cfgMotorLSign > 0 ? 1 : -1);
+  prefs.putChar("mr", cfgMotorRSign > 0 ? 1 : -1);
+  prefs.putBool("mirror", cfgMirrorEnc);
+  prefs.end();
+}
+
+static void loadConfig() {
+  prefs.begin("balance", true);
+  cfgPitchIsX   = prefs.getBool("axisX", cfgPitchIsX);
+  cfgPitchSign  = prefs.getChar("ps", 1) >= 0 ? 1.0f : -1.0f;
+  cfgYawSign    = prefs.getChar("ys", 1) >= 0 ? 1.0f : -1.0f;
+  cfgEncLSign   = prefs.getChar("el", 1) >= 0 ? 1.0f : -1.0f;
+  cfgEncRSign   = prefs.getChar("er", 1) >= 0 ? 1.0f : -1.0f;
+  cfgMotorLSign = prefs.getChar("ml", 1) >= 0 ? 1.0f : -1.0f;
+  cfgMotorRSign = prefs.getChar("mr", 1) >= 0 ? 1.0f : -1.0f;
+  cfgMirrorEnc  = prefs.getBool("mirror", false);
+  prefs.end();
+}
+
+// Chay lai calib 5s voi motor tat (dung chung cho lenh Calib & khi doi truc / dau pitch)
+static void runCalibNow() {
+  driveMotor(ENA, IN1, IN2, 0.0f);
+  driveMotor(ENB, IN3, IN4, 0.0f);
+  webSetState(1);
+  calibrateMpu();
+  i2cFailCount = 0;
+  resetEncoders();
+  resetControllerState(0, 0);
+  uprightStableCount = 0;
+  safetyTripped = fabsf(pitchEst) > 0.785f;
+  webClearCommands();            // bo cac lenh bam trong luc dang calib
+  lastStepUs = micros();
+}
+
+// Doi diem zero them `delta` rad: goc hien thi dich -delta ngay lap tuc (khong cho bo loc troi)
+static inline void shiftPitchZero(float delta) {
+  pitchEst -= delta;
+  lastPitchAccel -= delta;
+}
+
+// Tim goc pitch p* (do) tai do policy cho luc trung binh = 0 khi dung yen (van toc = 0).
+// Policy co do lech co san (act != 0 o pitch = 0); bu bang trim de xe dung thang khong bi day 1 phia.
+static float policyZeroPitchDeg() {
+  float lo = -10.0f * 3.14159265f / 180.0f, hi = -lo;
+  for (int it = 0; it < 24; it++) {
+    float mid = 0.5f * (lo + hi);
+    float a[RL_ACT_DIM] = {0.0f, 0.0f};
+    for (int k = 0; k < 20; k++) {          // prevAct la 2 dau vao cuoi -> lap den diem co dinh
+      float obs[RL_OBS_DIM] = {0, 0, mid, 0, 0, 0, 0, 0, 0, 0, a[0], a[1]};
+      rl_policy_predict(obs, a);
+    }
+    if (0.5f * (a[0] + a[1]) < 0.0f) lo = mid; else hi = mid;   // act tang theo pitch
+  }
+  return 0.5f * (lo + hi) * 57.29578f;
+}
+
+// Tra ve true neu da chay calib (loop() nen bo qua chu ky hien tai vi dt/encoder da cu)
+static bool processWebCommands() {
+  const float degToRad = 3.14159265f / 180.0f;
+  WebCmd c;
+  while (webPopCommand(c)) {
+    if (c.type == WCMD_TRIM) {
+      float newTrim = clampf(pitchTrim + c.val * degToRad, -10.0f * degToRad, 10.0f * degToRad);
+      shiftPitchZero(newTrim - pitchTrim);
+      pitchTrim = newTrim;
+      saveTrim();
+      Serial.print("[WEB] Trim(deg)="); Serial.println(pitchTrim / degToRad, 2);
+    } else if (c.type == WCMD_AUTO_TRIM) {
+      if (!paused) { Serial.println("[WEB] Auto-trim: can Pause truoc"); continue; }
+      float pz = policyZeroPitchDeg();                       // pitch (do) de act = 0
+      float newTrim = clampf(-pz * degToRad, -10.0f * degToRad, 10.0f * degToRad);
+      shiftPitchZero(newTrim - pitchTrim);
+      pitchTrim = newTrim;
+      saveTrim();
+      Serial.print("[WEB] Auto-trim: policy zero tai pitch(deg)="); Serial.print(pz, 2);
+      Serial.print(" -> trim(deg)="); Serial.println(pitchTrim / degToRad, 2);
+    } else if (c.type == WCMD_RESET_TRIM) {
+      shiftPitchZero(-pitchTrim);
+      pitchTrim = 0.0f;
+      saveTrim();
+      Serial.println("[WEB] Reset trim = 0");
+    } else if (c.type == WCMD_SET_OFFSET) {
+      float newOff = c.val * degToRad;
+      shiftPitchZero(newOff - pitchZeroOffset);
+      pitchZeroOffset = newOff;
+      Serial.print("[WEB] Offset(deg)="); Serial.println(c.val, 2);
+    } else if (c.type == WCMD_ZERO) {
+      pitchZeroOffset += pitchEst;
+      pitchEst = 0.0f;
+      lastPitchAccel = 0.0f;
+      Serial.print("[WEB] Zero tai cho! Offset(deg)="); Serial.println(pitchZeroOffset / degToRad, 2);
+    } else if (c.type == WCMD_CALIB) {
+      Serial.println("[WEB] Calib lai: tat motor...");
+      runCalibNow();
+      return true;
+    } else if (c.type == WCMD_PAUSE) {
+      paused = true;
+      driveMotor(ENA, IN1, IN2, 0.0f);
+      driveMotor(ENB, IN3, IN4, 0.0f);
+      Serial.println("[WEB] PAUSE: tat motor");
+    } else if (c.type == WCMD_RESUME) {
+      long a, b;
+      readEncoders(a, b);
+      resetControllerState(a, b);
+      uprightStableCount = 0;
+      paused = false;
+      webSetManual(0.0f, 0.0f);
+      Serial.println("[WEB] TIEP TUC");
+    } else if (c.type == WCMD_CFG_AXIS) {
+      cfgPitchIsX = !cfgPitchIsX;
+      saveConfig();
+      Serial.print("[WEB] Truc pitch = "); Serial.println(cfgPitchIsX ? "X (gx, ay)" : "Y (gy, ax)");
+      runCalibNow();                 // doi truc phai calib lai gyro & zero
+      return true;
+    } else if (c.type == WCMD_CFG_FLIP) {
+      int k = (int)c.val;
+      driveMotor(ENA, IN1, IN2, 0.0f);
+      driveMotor(ENB, IN3, IN4, 0.0f);
+      if      (k == 0) cfgPitchSign  = -cfgPitchSign;
+      else if (k == 1) cfgYawSign    = -cfgYawSign;
+      else if (k == 2) cfgEncLSign   = -cfgEncLSign;
+      else if (k == 3) cfgEncRSign   = -cfgEncRSign;
+      else if (k == 4) cfgMotorLSign = -cfgMotorLSign;
+      else if (k == 5) cfgMotorRSign = -cfgMotorRSign;
+      else if (k == 6) cfgMirrorEnc  = !cfgMirrorEnc;
+      saveConfig();
+      Serial.print("[WEB] Dao dau cau hinh #"); Serial.println(k);
+      if (k == 0) { runCalibNow(); return true; }   // doi dau pitch -> calib lai
+      long a, b;
+      readEncoders(a, b);
+      resetControllerState(a, b);
+      return true;
+    } else if (c.type == WCMD_ENC_RESET) {
+      resetEncoders();
+      resetControllerState(0, 0);
+      Serial.println("[WEB] Reset encoder");
+    }
+  }
+  return false;
+}
+
 void setup() {
   Serial.begin(115200);
+
+  // Doc trim da luu (NVS)
+  loadConfig();
+  prefs.begin("balance", true);
+  pitchTrim = clampf(prefs.getFloat("trim", 0.0f), -0.175f, 0.175f);
+  prefs.end();
 
   // 1. Khoi tao L298N
   pinMode(ENA, OUTPUT); pinMode(IN1, OUTPUT); pinMode(IN2, OUTPUT);
@@ -536,10 +715,15 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(ENCB_A), isrEncB, CHANGE);
   attachInterrupt(digitalPinToInterrupt(ENCB_B), isrEncB, CHANGE);
 
+  // 2b. Phat WiFi AP + web local (http://192.168.4.1) de xem thong so ngay tu luc khoi dong
+  webBegin();
+  webSetState(0);
+
   // 3. Test dong co quay nguoc & quay xuoi truoc, sau do tat dong co de calib 5s
   runStartupMotorSelfTest();
 
   // 4. Khoi tao & calib MPU6050 trong 5 giay (luc nay dong co da tat hoan toan)
+  webSetState(1);
   initMpu6050();
 
   // Xoa xung encoder phat sinh trong luc test / cam giu xe calib 5s
@@ -569,6 +753,7 @@ void loop() {
   readEncoders(encA, encB);
 
   processSerialCommands(encA, encB);
+  if (processWebCommands()) return;
 
   unsigned long nowUs = micros();
   if (nowUs - lastStepUs < (unsigned long)(CONTROL_DT * 1e6f)) return;
@@ -577,15 +762,15 @@ void loop() {
   lastStepUs = nowUs;
 
   // Doc MPU6050 & cap nhat bo loc bu (Complementary Filter)
-  int16_t ax, ay, az, gx, gy, gz;
+  int16_t ax = 0, ay = 0, az = 0, gx = 0, gy = 0, gz = 0;
   if (readMpuRaw(ax, ay, az, gx, gy, gz)) {
     i2cFailCount = 0;
     const float degToRad = 3.14159265f / 180.0f;
     float gpRaw = (float)selectPitchGyroRaw(gx, gy);
-    lastPitchRate = IMU_PITCH_SIGN * ((gpRaw - gyroPitchOffset) / 65.5f) * degToRad;
-    lastYawRate   = IMU_YAW_SIGN   * (((float)gz - gyroZOffset) / 65.5f) * degToRad;
+    lastPitchRate = cfgPitchSign * ((gpRaw - gyroPitchOffset) / 65.5f) * degToRad;
+    lastYawRate   = cfgYawSign   * (((float)gz - gyroZOffset) / 65.5f) * degToRad;
     if (ax != 0 || ay != 0 || az != 0) {
-      lastPitchAccel = computeRawAccelPitch(ax, ay, az) - pitchZeroOffset;
+      lastPitchAccel = computeRawAccelPitch(ax, ay, az) - zeroTotal();
       pitchEst = 0.98f * (pitchEst + lastPitchRate * dt) + 0.02f * lastPitchAccel;
     } else {
       pitchEst += lastPitchRate * dt;
@@ -600,13 +785,40 @@ void loop() {
 
   // Tinh van toc goc banh xe (rad/s) tu GA25-370 encoder 4x
   float radPerTick = (2.0f * 3.14159265f) / TICKS_PER_REV;
-  float wL = ENC_L_SIGN * ((float)(encA - prevEncA) * radPerTick) / dt;
-  float wR = ENC_R_SIGN * ((float)(encB - prevEncB) * radPerTick) / dt;
+  float wL = cfgEncLSign * ((float)(encA - prevEncA) * radPerTick) / dt;
+  float wR = cfgEncRSign * ((float)(encB - prevEncB) * radPerTick) / dt;
+  if (cfgMirrorEnc) wR = wL;   // encoder phai hong -> mirror tu encoder trai
   prevEncA = encA;
   prevEncB = encB;
 
   // Bu van toc nghieng than xe de lay dung van toc tinh tien mat dat
   float vFwd = (0.5f * (wL + wR) + pitchRate) * WHEEL_RADIUS;
+
+  // Dong goi thong so cho web telemetry (chay o core 0, khong chan vong dieu khien)
+  auto publishWeb = [&](float actL, float actR) {
+    WebTelemetry t;
+    const float radToDeg = 57.29578f;
+    t.pitch     = pitchEst * radToDeg;
+    t.pitchAcc  = lastPitchAccel * radToDeg;
+    t.pitchRate = pitchRate * radToDeg;
+    t.yawRate   = yawRate * radToDeg;
+    t.ax = (float)ax / 16384.0f; t.ay = (float)ay / 16384.0f; t.az = (float)az / 16384.0f;
+    t.gx = (float)gx / 65.5f;    t.gy = (float)gy / 65.5f;    t.gz = (float)gz / 65.5f;
+    t.wL = wL; t.wR = wR; t.vFwd = vFwd;
+    t.actL = actL; t.actR = actR;
+    t.encL = (long)(cfgEncLSign * (float)encA); t.encR = (long)(cfgEncRSign * (float)encB);
+    t.pitchZero = pitchZeroOffset * radToDeg;
+    t.trim = pitchTrim * radToDeg;
+    t.cfg[0] = cfgPitchIsX ? 1 : 0;
+    t.cfg[1] = (int8_t)cfgPitchSign;  t.cfg[2] = (int8_t)cfgYawSign;
+    t.cfg[3] = (int8_t)cfgEncLSign;   t.cfg[4] = (int8_t)cfgEncRSign;
+    t.cfg[5] = (int8_t)cfgMotorLSign; t.cfg[6] = (int8_t)cfgMotorRSign;
+    t.cfg[7] = cfgMirrorEnc ? 1 : 0;
+    t.dtMs = dt * 1000.0f;
+    t.state = paused ? 4 : (safetyTripped ? 3 : 2);
+    t.i2cFail = (uint8_t)(i2cFailCount > 255 ? 255 : i2cFailCount);
+    webPublish(t);
+  };
 
   // Kiem tra an toan co tre (cat > 45 deg hoac mat IMU; tu khoi phuc khi dung thang < 12 deg trong 0.5s)
   if (fabsf(pitchEst) > 0.785f || i2cFailCount > 5) {
@@ -629,10 +841,16 @@ void loop() {
   digitalWrite(CALIB_LED_PIN, safetyTripped ? LOW : HIGH);
 #endif
 
-  if (safetyTripped) {
-    driveMotor(ENA, IN1, IN2, 0.0f);
-    driveMotor(ENB, IN3, IN4, 0.0f);
+  if (safetyTripped || paused) {
+    // Khi PAUSE co the chay tay tung banh tu web (deadman 400 ms); con lai motor tat
+    float mL = 0.0f, mR = 0.0f;
+    if (paused) webGetManual(mL, mR);
+    mL = clampf(cfgMotorLSign * mL, -1.0f, 1.0f);
+    mR = clampf(cfgMotorRSign * mR, -1.0f, 1.0f);
+    driveMotor(ENA, IN1, IN2, mL);
+    driveMotor(ENB, IN3, IN4, mR);
     resetControllerState(encA, encB);
+    publishWeb(mL, mR);
     maybeLogTelemetry(encA, encB, wL, wR, vFwd, 0.0f, 0.0f);
     return;
   }
@@ -668,10 +886,11 @@ void loop() {
   float action[RL_ACT_DIM];
   rl_policy_predict(rawObs, action);
 
-  driveMotor(ENA, IN1, IN2, MOTOR_L_SIGN * action[0]);
-  driveMotor(ENB, IN3, IN4, MOTOR_R_SIGN * action[1]);
+  driveMotor(ENA, IN1, IN2, cfgMotorLSign * action[0]);
+  driveMotor(ENB, IN3, IN4, cfgMotorRSign * action[1]);
   prevActL = action[0];
   prevActR = action[1];
 
+  publishWeb(clampf(cfgMotorLSign * action[0], -1.0f, 1.0f), clampf(cfgMotorRSign * action[1], -1.0f, 1.0f));
   maybeLogTelemetry(encA, encB, wL, wR, vFwd, action[0], action[1]);
 }
