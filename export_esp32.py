@@ -136,7 +136,7 @@ def export_policy_to_header(model: PPO, out_header: Path) -> str:
 
 
 def build_esp32_body() -> str:
-    return """// ============================================================================
+    body = """// ============================================================================
 // 1. CAU HINH CHAN ESP32 (tham khao dung config chan trong main.cpp cu)
 // ============================================================================
 // Dong co A (Trai) - L298N + GA25-370 Encoder pha A/B
@@ -171,15 +171,15 @@ def build_esp32_body() -> str:
 // Bang tham khao MOTOR_GEAR_RATIO cho cac ban GA25-370 pho bien:
 //   - Ban ~1360 RPM :  4.4f  ->  193.6 ticks/vong (4x)
 //   - Ban ~620  RPM :  9.8f  ->  431.2 ticks/vong (4x)
-//   - Ban ~280-300 RPM: 21.3f -> 937.2 ticks/vong (4x)  [Mac dinh]
+//   - Ban ~280-300 RPM: 21.3f -> 937.2 ticks/vong (4x)
 //   - Ban ~170-210 RPM: 34.0f -> 1496.0 ticks/vong (4x)
-//   - Ban ~130  RPM : 46.8f  -> 2059.2 ticks/vong (4x)
+//   - Ban ~130  RPM : 46.8f  -> 2059.2 ticks/vong (4x)  [Mac dinh]
 //   - Ban ~80-100 RPM: 75.0f -> 3300.0 ticks/vong (4x)
 // Co the kiem tra thuc te bang cach mo Serial Monitor (115200), bam 'T' roi
 // quay tay banh xe dung 1 vong xem gia tri encA / encB thay doi bao nhieu xung.
 static const float ENCODER_BASE_PPR  = 11.0f;
 static const float ENCODER_QUAD_MULT = 4.0f;
-static const float MOTOR_GEAR_RATIO  = 21.3f;
+static const float MOTOR_GEAR_RATIO  = 46.8f;
 static const float TICKS_PER_REV     = ENCODER_BASE_PPR * ENCODER_QUAD_MULT * MOTOR_GEAR_RATIO;
 
 // Chinh truc & dau (+/-1.0f) sao cho khop chieu gan MPU6050 & L298N tren xe:
@@ -208,9 +208,9 @@ static const float TICKS_PER_REV     = ENCODER_BASE_PPR * ENCODER_QUAD_MULT * MO
 #define CALIB_LED_PIN         2
 
 // Che do hoat dong:
-//   0 = Chi tu can bang tai cho (mac dinh, tat W/S/A/D, giu cmdV=0 & cmdYaw=0)
-//   1 = Bat nhan lenh di chuyen qua Serial (W/S/A/D/X/+/-)
-#define ENABLE_MOVE_COMMANDS 0
+//   0 = Chi tu can bang tai cho (tat W/S/A/D, giu cmdV=0 & cmdYaw=0)
+//   1 = Bat nhan lenh di chuyen qua Serial (W/S/A/D/X/+/-)  [Mac dinh]
+#define ENABLE_MOVE_COMMANDS 1
 
 // Bu vung chet PWM cua L298N (~1.8-2V sut ap BJT) + hop so GA25-370 (0..35).
 // Tang len ~18..28 neu thay banh bi re ma khong nhich khi xe nghieng nhe.
@@ -224,14 +224,14 @@ static const float TICKS_PER_REV     = ENCODER_BASE_PPR * ENCODER_QUAD_MULT * MO
 #define MOTOR_SELFTEST_CMD    0.30f
 #define MOTOR_SELFTEST_MS     350
 
-// Thong so vat ly & dieu khien (khop 100% voi MuJoCo env)
-static const float WHEEL_RADIUS  = 0.0325f; // Banh 65mm -> R = 0.0325 m
+// Thong so vat ly & dieu khien (khop 100% voi MuJoCo env 130 RPM)
+static const float WHEEL_RADIUS  = __WHEEL_RADIUS__f; // Banh 65mm -> R = 0.0325 m
 static const float CONTROL_DT    = 0.02f;   // 50 Hz (20 ms)
 #if ENABLE_MOVE_COMMANDS
-static const float MAX_CMD_V     = 0.45f;   // m/s
-static const float MAX_CMD_YAW   = 1.80f;   // rad/s
-static const float MAX_ACCEL_V   = 0.65f;   // m/s^2
-static const float MAX_ACCEL_YAW = 3.50f;   // rad/s^2
+static const float MAX_CMD_V     = __MAX_CMD_V__f;     // m/s
+static const float MAX_CMD_YAW   = __MAX_CMD_YAW__f;   // rad/s
+static const float MAX_ACCEL_V   = __MAX_ACCEL_V__f;   // m/s^2
+static const float MAX_ACCEL_YAW = __MAX_ACCEL_YAW__f; // rad/s^2
 #endif
 
 // ============================================================================
@@ -547,8 +547,8 @@ static void initMpu6050() {
 // 6. TRANG THAI DIEU KHIEN & LENH SERIAL (T/Z; them W/S/A/D/X/+/- khi bat di chuyen)
 // ============================================================================
 #if ENABLE_MOVE_COMMANDS
-static float targetSpeed = 0.40f;    // Toc do tien/lui mac dinh (m/s)
-static float targetTurnRate = 1.50f; // Toc do re mac dinh (rad/s)
+static float targetSpeed = 0.24f;    // Toc do tien/lui mac dinh cho ban 130 RPM (m/s)
+static float targetTurnRate = 1.20f; // Toc do re mac dinh (rad/s)
 static float targetV = 0.0f;
 static float targetYawRate = 0.0f;
 #endif
@@ -636,12 +636,12 @@ static void processSerialCommands(long encA, long encB) {
       targetYawRate = 0.0f;
       Serial.println("-> DUNG CAN BANG");
     } else if (command == '+') {
-      targetSpeed = clampf(targetSpeed + 0.05f, 0.15f, MAX_CMD_V);
+      targetSpeed = clampf(targetSpeed + 0.04f, 0.10f, MAX_CMD_V);
       if (targetV > 0.01f) targetV = targetSpeed;
       else if (targetV < -0.01f) targetV = -targetSpeed;
       Serial.print("Toc do muc tieu: "); Serial.println(targetSpeed, 2);
     } else if (command == '-') {
-      targetSpeed = clampf(targetSpeed - 0.05f, 0.15f, MAX_CMD_V);
+      targetSpeed = clampf(targetSpeed - 0.04f, 0.10f, MAX_CMD_V);
       if (targetV > 0.01f) targetV = targetSpeed;
       else if (targetV < -0.01f) targetV = -targetSpeed;
       Serial.print("Toc do muc tieu: "); Serial.println(targetSpeed, 2);
@@ -809,6 +809,16 @@ void loop() {
   maybeLogTelemetry(encA, encB, wL, wR, vFwd, action[0], action[1]);
 }
 """
+    replacements = {
+        "__WHEEL_RADIUS__": f"{SelfBalancingCarEnv.WHEEL_RADIUS:.4f}",
+        "__MAX_CMD_V__": f"{SelfBalancingCarEnv.MAX_CMD_V:.2f}",
+        "__MAX_CMD_YAW__": f"{SelfBalancingCarEnv.MAX_CMD_YAW_RATE:.2f}",
+        "__MAX_ACCEL_V__": f"{SelfBalancingCarEnv.MAX_ACCEL_V:.2f}",
+        "__MAX_ACCEL_YAW__": f"{SelfBalancingCarEnv.MAX_ACCEL_YAW:.2f}",
+    }
+    for token, val in replacements.items():
+        body = body.replace(token, val)
+    return body
 
 
 def write_esp32_sketch(out_cpp: Path) -> None:

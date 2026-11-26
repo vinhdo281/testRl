@@ -220,15 +220,15 @@ def run_viewer(model: PPO, seed: int, push_test: bool, demo_move: bool) -> None:
         ch = ch.upper()
         with lock:
             if ch in ("W", "I", "UP"):
-                state["cmd_v"] = 0.40
+                state["cmd_v"] = 0.24
                 state["cmd_yaw"] = 0.0
             elif ch in ("S", "K", "DOWN"):
-                state["cmd_v"] = -0.40
+                state["cmd_v"] = -0.24
                 state["cmd_yaw"] = 0.0
             elif ch in ("A", "J", "LEFT"):
-                state["cmd_yaw"] = 1.50
+                state["cmd_yaw"] = 1.20
             elif ch in ("D", "L", "RIGHT"):
-                state["cmd_yaw"] = -1.50
+                state["cmd_yaw"] = -1.20
             elif ch in ("X", "0"):
                 state["cmd_v"] = 0.0
                 state["cmd_yaw"] = 0.0

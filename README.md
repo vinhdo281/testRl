@@ -65,4 +65,4 @@ C:\Users\Administrator\miniconda3\envs\mujoco\python.exe export_esp32.py
 ```
 - **Arduino IDE (khuyên dùng nếu muốn 1 file duy nhất)**: Mở [xe_can_bang_rl_esp32.ino](file:///c:/Users/Administrator/.gemini/antigravity/scratch/xe_can_bang_rl/esp32_deploy/xe_can_bang_rl_esp32/xe_can_bang_rl_esp32.ino) (đã gộp sẵn toàn bộ trọng số RL và code điều khiển GA25-370 + L298N + MPU6050 trong 1 file).
 - **PlatformIO**: Thư mục `esp32_deploy/` có sẵn `platformio.ini`, `rl_policy.h` và `main_rl.cpp`.
-- **Chế độ mặc định**: `#define ENABLE_MOVE_COMMANDS 0` (**chỉ tự cân bằng tại chỗ**, tắt các lệnh `W/S/A/D`, giữ Serial `T` bật/tắt telemetry và `Z` zero góc/encoder). Khi cần điều khiển di chuyển (`W/S/A/D/X/+/-`), đổi `#define ENABLE_MOVE_COMMANDS 1`.
+- **Cấu hình mặc định**: Động cơ **GA25-370 130 RPM** (`MOTOR_GEAR_RATIO = 46.8f`, `2059.2 ticks/vòng`) và `#define ENABLE_MOVE_COMMANDS 1` (**vừa cân bằng vừa di chuyển** `W/S/A/D/X/+/-`, kèm `T` debug, `Z` zero, tự kiểm tra motor ngược/xuôi và calib 5s lúc khởi động). Đổi `ENABLE_MOVE_COMMANDS` về `0` nếu chỉ muốn đứng cân bằng tại chỗ.

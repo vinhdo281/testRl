@@ -28,10 +28,11 @@ class SelfBalancingCarEnv(gym.Env):
 
     WHEEL_RADIUS = 0.0325
     TRACK_WIDTH = 0.156
-    MAX_CMD_V = 0.45         # m/s
-    MAX_CMD_YAW_RATE = 1.80  # rad/s
-    MAX_ACCEL_V = 0.65       # m/s^2 (0.013 m/s per 20ms step)
-    MAX_ACCEL_YAW = 3.50     # rad/s^2 (0.070 rad/s per 20ms step)
+    # GA25-370 130 RPM (~13.61 rad/s -> ~0.442 m/s no-load): keep cruising headroom for pitch recovery
+    MAX_CMD_V = 0.28         # m/s
+    MAX_CMD_YAW_RATE = 1.40  # rad/s
+    MAX_ACCEL_V = 0.45       # m/s^2 (0.009 m/s per 20ms step)
+    MAX_ACCEL_YAW = 3.00     # rad/s^2 (0.060 rad/s per 20ms step)
 
     # Fixed normalization scales for 12D observation (O(1), ESP32-deployable)
     OBS_SCALES = np.array(
@@ -42,8 +43,8 @@ class SelfBalancingCarEnv(gym.Env):
             10.0,   # theta_dot: body pitch angular velocity (rad/s)
             1.5,    # yaw_err: local heading tracking/hold error (rad)
             5.0,    # yaw_rate: body yaw angular velocity (rad/s)
-            45.0,   # w_l: left wheel angular velocity (rad/s)
-            45.0,   # w_r: right wheel angular velocity (rad/s)
+            16.0,   # w_l: left wheel angular velocity (rad/s, 130 RPM ~= 13.6 rad/s)
+            16.0,   # w_r: right wheel angular velocity (rad/s, 130 RPM ~= 13.6 rad/s)
             1.0,    # cmd_v: active smoothed forward velocity command (m/s)
             2.5,    # cmd_yaw_rate: active smoothed yaw angular rate command (rad/s)
             1.0,    # prev_action L
@@ -87,8 +88,8 @@ class SelfBalancingCarEnv(gym.Env):
         self._base_chassis_ipos = self.model.body_ipos[1].copy()
         self._base_floor_friction = self.model.geom_friction[0].copy()
 
-        self.motor_torque_max = 0.25  # N*m per motor at 100% PWM
-        self.motor_back_emf = 0.006   # N*m / (rad/s) (~41.7 rad/s no-load)
+        self.motor_torque_max = 0.42  # N*m per motor at 100% PWM (GA25-370 130 RPM + L298N)
+        self.motor_back_emf = 0.031   # N*m / (rad/s) (~13.55 rad/s ~= 129.4 RPM no-load)
         self.motor_deadzone = 0.02    # small L298N deadzone
 
         # Action: normalized PWM [-1, 1] for [left_motor, right_motor]
@@ -136,8 +137,12 @@ class SelfBalancingCarEnv(gym.Env):
                 self.np_random.uniform(-self.MAX_CMD_YAW_RATE, self.MAX_CMD_YAW_RATE)
             )
         return (
-            float(self.np_random.uniform(-0.42, 0.42)),
-            float(self.np_random.uniform(-1.60, 1.60)),
+            float(self.np_random.uniform(-0.9 * self.MAX_CMD_V, 0.9 * self.MAX_CMD_V)),
+            float(
+                self.np_random.uniform(
+                    -0.85 * self.MAX_CMD_YAW_RATE, 0.85 * self.MAX_CMD_YAW_RATE
+                )
+            ),
         )
 
     @staticmethod
@@ -146,15 +151,15 @@ class SelfBalancingCarEnv(gym.Env):
         if s < 120:
             return 0.0, 0.0
         if s < 320:
-            return 0.40, 0.0
+            return 0.24, 0.0
         if s < 430:
             return 0.0, 0.0
         if s < 610:
-            return 0.32, 1.20
+            return 0.20, 1.00
         if s < 780:
-            return -0.38, 0.0
+            return -0.22, 0.0
         if s < 910:
-            return 0.0, -1.50
+            return 0.0, -1.20
         return 0.0, 0.0
 
     @staticmethod
@@ -321,8 +326,8 @@ class SelfBalancingCarEnv(gym.Env):
         )
         w = np.array([self.data.qvel[6], self.data.qvel[7]], dtype=np.float64)
         tau = eff * self.motor_torque_max * self._cur_motor_gain - self.motor_back_emf * w
-        self.data.ctrl[0] = float(np.clip(tau[0], -0.30, 0.30))
-        self.data.ctrl[1] = float(np.clip(tau[1], -0.30, 0.30))
+        self.data.ctrl[0] = float(np.clip(tau[0], -0.55, 0.55))
+        self.data.ctrl[1] = float(np.clip(tau[1], -0.55, 0.55))
 
     def step(
         self, action: np.ndarray

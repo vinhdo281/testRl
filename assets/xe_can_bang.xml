@@ -85,7 +85,7 @@
 
       <!-- Left Wheel (bánh 65.SLDPRT: R=32.5mm) -->
       <body name="left_wheel" pos="0 0.078 0">
-        <joint name="left_wheel_joint" type="hinge" axis="0 1 0" damping="0.001" armature="0.0005" />
+        <joint name="left_wheel_joint" type="hinge" axis="0 1 0" damping="0.002" armature="0.0015" />
         <geom name="left_tire" type="cylinder" size="0.0325 0.010" euler="1.5707963 0 0" mass="0.035" material="rubber_tire" condim="3" friction="1.2 0.005 0.0001" />
         <geom name="left_rim" type="cylinder" size="0.024 0.0105" euler="1.5707963 0 0" mass="0.005" material="wheel_rim" contype="0" conaffinity="0" />
         <!-- Visual spoke indicator so wheel rotation is clearly visible -->
@@ -94,7 +94,7 @@
 
       <!-- Right Wheel (bánh 65.SLDPRT: R=32.5mm) -->
       <body name="right_wheel" pos="0 -0.078 0">
-        <joint name="right_wheel_joint" type="hinge" axis="0 1 0" damping="0.001" armature="0.0005" />
+        <joint name="right_wheel_joint" type="hinge" axis="0 1 0" damping="0.002" armature="0.0015" />
         <geom name="right_tire" type="cylinder" size="0.0325 0.010" euler="1.5707963 0 0" mass="0.035" material="rubber_tire" condim="3" friction="1.2 0.005 0.0001" />
         <geom name="right_rim" type="cylinder" size="0.024 0.0105" euler="1.5707963 0 0" mass="0.005" material="wheel_rim" contype="0" conaffinity="0" />
         <geom name="right_spoke" type="box" size="0.020 0.011 0.0025" euler="0 0 0" mass="0.001" material="acrylic_dark" contype="0" conaffinity="0" />
@@ -103,8 +103,8 @@
   </worldbody>
 
   <actuator>
-    <motor name="left_motor" joint="left_wheel_joint" gear="1" ctrllimited="true" ctrlrange="-0.30 0.30" />
-    <motor name="right_motor" joint="right_wheel_joint" gear="1" ctrllimited="true" ctrlrange="-0.30 0.30" />
+    <motor name="left_motor" joint="left_wheel_joint" gear="1" ctrllimited="true" ctrlrange="-0.55 0.55" />
+    <motor name="right_motor" joint="right_wheel_joint" gear="1" ctrllimited="true" ctrlrange="-0.55 0.55" />
   </actuator>
 
   <sensor>
