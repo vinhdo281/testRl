@@ -116,6 +116,8 @@ static const float TICKS_PER_REV     = ENCODER_BASE_PPR * ENCODER_QUAD_MULT * MO
 #define ENC_R_SIGN          1.0f
 #define MOTOR_L_SIGN        1.0f
 #define MOTOR_R_SIGN        1.0f
+// 1 = dung wR = wL (encoder PHAI dang hong pha B - day xanh la, GPIO 19). Sua day xong dat ve 0.
+#define ENC_MIRROR_R        1
 #define PITCH_OFFSET_RAD    0.0f
 
 // Hieu chuan cam bien trong 5 giay dau tien khi bat nguon:
@@ -656,6 +658,9 @@ void loop() {
   float radPerTick = (2.0f * 3.14159265f) / TICKS_PER_REV;
   float wL = ENC_L_SIGN * ((float)(encA - prevEncA) * radPerTick) / dt;
   float wR = ENC_R_SIGN * ((float)(encB - prevEncB) * radPerTick) / dt;
+#if ENC_MIRROR_R
+  wR = wL;   // encoder phai hong -> mirror tu encoder trai
+#endif
   prevEncA = encA;
   prevEncB = encB;
 
